@@ -892,20 +892,23 @@ button {
 
 /* ---------- Reading mode: paginated flashcards ---------- */
 .reading-cards {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
   margin: 20px 0 26px;
 }
 
 .reading-card {
+  position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 16px;
+  text-align: center;
+  gap: 8px;
   background: var(--surface-raised);
   border: 1.5px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 16px 18px;
+  padding: 14px 10px 12px;
   box-shadow: var(--shadow-sm);
   cursor: pointer;
   transition: border-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
@@ -913,12 +916,27 @@ button {
 .reading-card:hover {border-color: var(--accent-seal); transform: translateY(-1px); }
 .reading-card.is-playing {border-color: var(--accent-jade); box-shadow: 0 0 0 3px var(--accent-jade-soft); }
 
+/* SVG word image (viewBox 0 0 120 120) shown at 96x96. Its colors use var(--a, fallback) etc. */
+.reading-card-img {
+  --a: var(--accent-jade);
+  --b: var(--accent-gold);
+  --card: var(--surface-raised);
+  width: 96px;
+  height: 96px;
+  flex: none;
+}
+.reading-card-img svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .reading-card-korean {
   font-family: var(--font-display);
   font-weight: 900;
-  font-size: clamp(1.25rem, 5.5vw, 1.65rem);
+  font-size: clamp(1.15rem, 5vw, 1.5rem);
   line-height: 1.25;
-  flex: 0 1 44%;
+  max-width: 100%;
   min-width: 0;
   word-break: keep-all;
   overflow-wrap: anywhere;
@@ -927,22 +945,44 @@ button {
 .reading-card-body {
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 3px;
-  flex: 1;
+  width: 100%;
   min-width: 0;
 }
-.reading-card-tag {
+.reading-details {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 12px 4px 0;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   font-family: var(--font-mono);
-  color: var(--accent-jade);
-  font-size: 0.68rem;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
+  font-size: 0.7rem;
+  line-height: 1.5;
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+.reading-details-korean {
+  font-family: var(--font-display);
+  font-weight: 700;
+  color: var(--ink-soft);
+  margin-right: 6px;
 }
 .reading-card-meaning {
   font-family: 'Noto Sans Bengali', var(--font-ui);
-  font-size: 0.98rem;
+  font-size: 0.95rem;
   font-weight: 600;
   color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.reading-card-english {
+  font-family: var(--font-ui);
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
 }
 .reading-card-bangla {
   font-size: 0.9rem;
@@ -951,16 +991,19 @@ button {
 }
 
 .reading-card-play {
-  width: 40px;
-  height: 40px;
-  flex: none;
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
   color: var(--accent-seal);
 }
 .reading-card.is-playing .reading-card-play {color: var(--accent-jade); }
 
 .reading-actions {justify-content: space-between; }
 @media (max-width: 480px) {
-  .reading-card {padding: 12px 14px; gap: 12px; }
+  .reading-card {padding: 12px 8px 10px; gap: 6px; }
+  .reading-cards {gap: 8px; }
   .reading-actions {flex-direction: column; }
 }
 .option-hanzi {
@@ -1370,4 +1413,100 @@ button, .chip, .segmented-btn, .option-btn { touch-action: manipulation; -webkit
   font-weight: 600;
   color: var(--ink);
   font-variant-numeric: tabular-nums;
+}
+
+
+/* ==========================================================================
+   Standard control sizes — one neat, consistent scale for every mode
+   (Exam / Reading / Listen). Placed last so it wins over the earlier rules.
+   Heights: chips 34px · small 34px · buttons 40px · main buttons 44px ·
+   Start 46px · segmented 36px (44px when icon is above the label).
+   ========================================================================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 18px;
+  font-size: 0.9rem;
+  line-height: 1.2;
+  border-radius: 10px;
+}
+.btn-lg {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 20px;
+  font-size: 0.92rem;
+  border-radius: 10px;
+}
+.btn-sm {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 0.82rem;
+}
+#start-btn { min-height: 46px; }
+
+.chip,
+.chip--sm,
+#count-chips .chip {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 0.82rem;
+  line-height: 1.2;
+}
+
+.segmented { padding: 3px; gap: 3px; border-radius: 12px; }
+.segmented-btn {
+  min-height: 36px;
+  padding: 0 8px;
+  font-size: 0.82rem;
+  border-radius: 9px;
+}
+.segmented-icon { font-size: 0.95rem; }
+/* Narrow half-width toggles keep the icon above the label so three options still fit */
+.segmented--triple .segmented-btn {
+  flex-direction: column;
+  min-height: 44px;
+  padding: 4px 2px;
+  gap: 2px;
+  font-size: 0.7rem;
+  border-radius: 9px;
+}
+.segmented--triple .segmented-icon { font-size: 1rem; }
+
+.btn-round { width: 44px; height: 44px; }
+.btn-round svg { width: 20px; height: 20px; }
+.icon-btn { width: 36px; height: 36px; }
+
+/* Previous / Next page sit side by side instead of stacking */
+.reading-actions { flex-direction: row; gap: 10px; }
+.reading-actions .btn { flex: 1 1 0; width: auto; min-width: 0; }
+
+
+/* Listen mode: playback speed chooser */
+.listen-speed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 18px 0 6px;
+}
+.listen-speed-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.listen-speed-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+.listen-speed-chips .chip {
+  font-family: var(--font-mono);
+  min-height: 34px;
 }

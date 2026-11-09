@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500;700;900&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&family=Noto+Sans+Bengali:wght@400;600&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="style.css?v=18" />
+<link rel="stylesheet" href="style.css?v=26" />
 <style>
   /* Belt-and-suspenders: guarantees only one of the Listen play/pause icons
      is ever visible, independent of style.css caching. */
@@ -102,6 +102,18 @@
         </div>
         <p class="mode-hint" id="exam-style-hint" hidden></p>
 
+        <div id="reading-image-section" class="setup-section" hidden>
+          <h3>Image</h3>
+          <div id="reading-image-toggle" class="segmented segmented--triple" role="radiogroup" aria-label="Show images on Reading cards">
+            <button class="segmented-btn is-active" data-image="on" type="button" role="radio" aria-checked="true">
+              <span class="segmented-icon" aria-hidden="true">🖼️</span> With image
+            </button>
+            <button class="segmented-btn" data-image="off" type="button" role="radio" aria-checked="false">
+              <span class="segmented-icon" aria-hidden="true">🔤</span> Only text
+            </button>
+          </div>
+        </div>
+
         <div class="setup-section">
           <div class="setup-row">
             <h3>Topik</h3>
@@ -117,7 +129,7 @@
 
 
         <div class="setup-duo">
-          <div class="setup-section setup-half">
+          <div id="language-section" class="setup-section setup-half">
             <h3>Language</h3>
             <div id="language-toggle" class="segmented segmented--triple" role="radiogroup" aria-label="Meaning display language">
               <button class="segmented-btn is-active" data-language="bangla" type="button" role="radio" aria-checked="true">
@@ -251,6 +263,8 @@
       <div class="quiz-actions">
         <button id="reading-exit-btn" class="btn btn-ghost btn-lg" type="button">Back to home</button>
       </div>
+
+      <ul id="reading-details" class="reading-details" aria-label="Word details for this page"></ul>
     </div>
   </section>
 
@@ -302,6 +316,11 @@
         <button id="listen-next-btn" class="btn-round" type="button" aria-label="Next word">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6v12M7 12l10-6v12L7 12Z" fill="currentColor"/></svg>
         </button>
+      </div>
+
+      <div class="listen-speed" role="group" aria-label="Playback speed">
+        <span class="listen-speed-label">Speed</span>
+        <div id="listen-speed-chips" class="listen-speed-chips"></div>
       </div>
 
       <div class="quiz-actions">
@@ -378,7 +397,7 @@
   <p>Design and Develop by <a href="https://fb.com/jaber5717" target="_blank" rel="noopener noreferrer">JA JONY</a></p>
 </footer>
 
-<script src="data.js?v=18"></script>
-<script src="script.js?v=18"></script>
+<script src="data.js?v=24"></script>
+<script src="script.js?v=25"></script>
 </body>
 </html>

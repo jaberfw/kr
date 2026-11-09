@@ -8,6 +8,13 @@
 /** Path to the vocabulary database, relative to index.html. */
 const DATABASE_PATH = 'database.json';
 
+/**
+ * Path to the word images, relative to index.html. image.json is an array of
+ * { id, korean, english, svg } joined to the vocabulary by `id`.
+ * It is optional: if the file is missing the app simply shows no images.
+ */
+const IMAGE_PATH = 'image.json';
+
 /** Lessons in display order (1-60). Only lessons that have words are shown as chips. */
 const LEVEL_ORDER = Array.from({ length: 60 }, (_, i) => String(i + 1));
 
@@ -16,6 +23,9 @@ const OPTIONS_PER_QUESTION = 4;
 
 /** Question-count choices offered on the start screen. 'all' uses the entire filtered pool. */
 const QUESTION_COUNT_CHOICES = [10, 20, 30, 50, 'all'];
+
+/** Count choices in Reading mode: multiples of 6 (one page = 6 words). */
+const READING_COUNT_CHOICES = [6, 12, 18, 24, 30, 'all'];
 
 /** Bucket size (in words) used to build the "how many words" choices in Listen mode. */
 const LISTEN_RANGE_STEP = 5;
@@ -72,8 +82,8 @@ function sliceByRange(pool, range) {
 /** Minimum words a filtered pool must contain to generate a valid exam (1 correct + 3 distractors). */
 const MIN_POOL_SIZE = OPTIONS_PER_QUESTION;
 
-/** Words shown per page in Reading mode. */
-const READING_PAGE_SIZE = 5;
+/** Words shown per page in Reading mode (laid out in 2 columns). */
+const READING_PAGE_SIZE = 6;
 
 /**
  * Audio folders. Every clip is named after the word's numeric id in database.json,
@@ -112,12 +122,12 @@ const DEFAULT_STATS = Object.freeze({
 function topicInfoForLesson(lessonNumber) {
   if (lessonNumber >= 61) {
     const n = lessonNumber - 60;
-    return { key: `topic${n}`, label: `Topik ${n}`, short: `Topik ${n}`, order: n, byLesson: false };
+    return { key: `topic${n}`, label: `Topik ${n}`, short: `Topik ${n}`, order: 10 + n, byLesson: false };
   }
   if (lessonNumber <= 30) {
-    return { key: 'textbook1', label: 'Textbook 1', short: 'Textbook 1', order: 100, byLesson: true };
+    return { key: 'textbook1', label: 'Textbook 1', short: 'Textbook 1', order: 1, byLesson: true };
   }
-  return { key: 'textbook2', label: 'Textbook 2', short: 'Textbook 2', order: 101, byLesson: true };
+  return { key: 'textbook2', label: 'Textbook 2', short: 'Textbook 2', order: 2, byLesson: true };
 }
 
 /** True for the two textbook groups (whose categories are lessons). */
@@ -167,12 +177,25 @@ let _dbPromise = null;
 let _wordsById = new Map();
 function loadDatabase() {
   if (!_dbPromise) {
+    // image.json is optional: any problem loading it (missing, invalid) just means "no images".
+    const imagesPromise = fetch(IMAGE_PATH)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((list) => (Array.isArray(list) ? list : []))
+      .catch(() => []);
+
     _dbPromise = fetch(DATABASE_PATH)
       .then((res) => {
         if (!res.ok) throw new Error(`Failed to load database (${res.status})`);
         return res.json();
       })
-      .then((raw) => {
+      .then((raw) => imagesPromise.then((images) => [raw, images]))
+      .then(([raw, images]) => {
+        // id -> image entry. Entries with an empty svg (words that cannot be drawn) are ignored.
+        const imageById = new Map();
+        images.forEach((img) => {
+          if (img && img.id != null && typeof img.svg === 'string' && img.svg.trim()) imageById.set(Number(img.id), img);
+        });
+
         const words = [];
         const levels = {};     // lesson key -> number of words
         const levelBook = {};  // lesson key -> book number (1 or 2)
@@ -190,6 +213,8 @@ function loadDatabase() {
               korean: w.korean,
               bangla: w.bengali,
               english: w.english || '',
+              // Optional SVG image (markup string), looked up in image.json by id. Empty when the word has none.
+              imgSvg: (imageById.get(Number(w.id)) || {}).svg || '',
               options: Array.isArray(w.options) ? w.options : [],
               page: w.page,
               level: key,

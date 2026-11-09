@@ -41,9 +41,12 @@
     examStyleToggle: $('#exam-style-toggle'),
     examStyleHint: $('#exam-style-hint'),
     examAudioToggle: $('#exam-audio-toggle'),
+    readingImageSection: $('#reading-image-section'),
+    readingImageToggle: $('#reading-image-toggle'),
     wrongStats: $('#wrong-stats'),
     wrongStatsList: $('#wrong-stats-list'),
     languageToggle: $('#language-toggle'),
+    languageSection: $('#language-section'),
     countChips: $('#count-chips'),
     countHeading: $('#count-heading'),
     repeatSection: $('#repeat-section'),
@@ -99,6 +102,7 @@
     readingPrevBtn: $('#reading-prev-btn'),
     readingNextBtn: $('#reading-next-btn'),
     readingExitBtn: $('#reading-exit-btn'),
+    readingDetails: $('#reading-details'),
     brandHomeBtn: $('#brand-home-btn'),
 
     listenProgressLabel: $('#listen-progress-label'),
@@ -119,11 +123,15 @@
     listenNextBtn: $('#listen-next-btn'),
     listenQuitBtn: $('#listen-quit-btn'),
     listenHomeBtn: $('#listen-home-btn'),
+    listenSpeedChips: $('#listen-speed-chips'),
   };
 
   /* ------------------------------------------------------------------ *
    * State
    * ------------------------------------------------------------------ */
+  const LISTEN_SPEED_KEY = 'epsKoreanQuiz.listenSpeed.v1';
+  const LISTEN_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+
   const state = {
     examStartedAt: 0,       // Date.now() when the current exam began
     examTimerId: null,      // setInterval id for the live exam timer
@@ -146,6 +154,7 @@
     answers: [],    // [{word, correctKey, chosenKey, isCorrect}]
     locked: false,
 
+    readingImage: true,     // true = Reading cards show the CSS-drawn image (when the word has one)
     examAudio: true,        // true = Korean audio plays + play button; false = text only
     examStyle: 'mastery',   // 'mastery' | 'normal' — mastery repeats wrong words until all are correct
     queue: [],              // mastery: questions still to ask this round
@@ -164,8 +173,9 @@
     listenStage: 'ko',    // 'ko' | 'meaning' — 'meaning' is the Bangla or English clip
     listenPlaying: false, // true while the auto-advancing chain is actively running (not paused)
     listenToken: 0,       // bumped to cancel any in-flight audio callback chain
-    listenAudio: null,    // the current Audio object, so pause/resume/stop can reach it
-    listenAudioCleanup: null, // detaches the current clip's listeners when playback is cut short
+    listenSources: [],    // Web Audio sources scheduled for the current word, so pause/skip/stop can cut them
+    listenUiTimer: null,  // timer that flips the Korean/meaning pill at the scheduled moment
+    listenSpeed: loadListenSpeed(), // playback rate for Listen mode (0.5x - 2x), remembered between visits
   };
 
   /* ------------------------------------------------------------------ *
@@ -547,7 +557,8 @@
       return;
     }
 
-    QUESTION_COUNT_CHOICES.forEach((count) => {
+    const choices = state.mode === 'reading' ? READING_COUNT_CHOICES : QUESTION_COUNT_CHOICES;
+    choices.forEach((count) => {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'chip';
@@ -592,7 +603,7 @@
       btn.setAttribute('aria-checked', String(active));
     });
     if (mode === 'reading') {
-      el.modeHint.textContent = 'See each Korean word with its meaning — 5 per page. Tap a card to hear it.';
+      el.modeHint.textContent = 'See each Korean word with its Bangla and English meaning — 6 per page, 2 columns. Tap a card to hear it.';
       el.startBtn.textContent = 'Start reading';
     } else if (mode === 'exam') {
       el.modeHint.textContent = 'Listen to the Korean audio, then pick the matching meaning.';
@@ -605,9 +616,16 @@
       el.startBtn.textContent = 'Start';
     }
     el.repeatSection.hidden = mode !== 'listen';
+    el.readingImageSection.hidden = mode !== 'reading';
+    el.languageSection.hidden = mode === 'reading'; // Reading always shows Korean + Bangla + English
     el.examStyleSection.hidden = mode !== 'exam';
     el.examStyleHint.hidden = mode !== 'exam';
     el.countHeading.textContent = mode === 'listen' ? 'How many words' : 'Questions';
+    // A chosen number that this mode doesn't offer (e.g. 10 in Exam -> Reading) falls back to All.
+    const modeChoices = mode === 'reading' ? READING_COUNT_CHOICES : QUESTION_COUNT_CHOICES;
+    if (typeof state.questionCount === 'number' && !modeChoices.includes(state.questionCount)) {
+      state.questionCount = 'all';
+    }
     el.rangeMultiWrap.hidden = mode !== 'listen';
     renderCountChips();
     updatePoolInfo();
@@ -647,6 +665,56 @@
       btn.classList.toggle('is-active', active);
       btn.setAttribute('aria-checked', String(active));
     });
+  }
+
+  function setReadingImage(on) {
+    state.readingImage = on;
+    Array.from(el.readingImageToggle.children).forEach((btn) => {
+      const active = (btn.dataset.image === 'on') === on;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-checked', String(active));
+    });
+  }
+
+  /**
+   * Makes a word's SVG safe and collision-free before it goes into the page:
+   *  - parses it as XML (invalid markup -> no image),
+   *  - removes <script>/<foreignObject>, on* attributes and javascript: links,
+   *  - renames every id (gradients, clip paths…) with the word's id so two images never clash.
+   * Results are cached per word id.
+   */
+  const _svgCache = new Map();
+  function cleanSvg(word) {
+    if (_svgCache.has(word.id)) return _svgCache.get(word.id);
+    let out = '';
+    try {
+      const doc = new DOMParser().parseFromString(word.imgSvg, 'image/svg+xml');
+      const root = doc.documentElement;
+      if (!doc.querySelector('parsererror') && root && root.nodeName.toLowerCase() === 'svg') {
+        root.querySelectorAll('script, foreignObject').forEach((n) => n.remove());
+        const idMap = new Map();
+        const all = [root, ...root.querySelectorAll('*')];
+        all.forEach((n) => { if (n.id) idMap.set(n.id, `w${word.id}-${n.id}`); });
+        all.forEach((n) => {
+          Array.from(n.attributes).forEach((at) => {
+            const name = at.name.toLowerCase();
+            let value = at.value;
+            if (name.startsWith('on') || /^\s*javascript:/i.test(value)) { n.removeAttribute(at.name); return; }
+            if (name === 'id' && idMap.has(value)) { n.setAttribute('id', idMap.get(value)); return; }
+            idMap.forEach((to, from) => {
+              if (value === `#${from}`) value = `#${to}`;
+              value = value.split(`url(#${from})`).join(`url(#${to})`);
+            });
+            if (value !== at.value) n.setAttribute(at.name, value);
+          });
+        });
+        root.removeAttribute('width');
+        root.removeAttribute('height');
+        out = root.outerHTML;
+      }
+    } catch (e) { out = ''; }
+    _svgCache.set(word.id, out);
+    return out;
   }
 
   function setLanguage(language) {
@@ -1177,7 +1245,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * Reading mode: paginated flashcards (5 words/page), audio plays on tap
+   * Reading mode: paginated flashcards (6 words/page, 2 columns), audio plays on tap
    * ------------------------------------------------------------------ */
   function startReadingSession() {
     if (state.pool.length < 1) {
@@ -1233,11 +1301,17 @@
       card.setAttribute('tabindex', '0');
       card.setAttribute('aria-label', `Play pronunciation for ${word.korean}`);
 
+      const svgMarkup = state.readingImage && word.imgSvg ? cleanSvg(word) : '';
+      const imageMarkup = svgMarkup
+        ? `<div class="reading-card-img" aria-hidden="true">${svgMarkup}</div>`
+        : '';
+
       card.innerHTML = `
+        ${imageMarkup}
         <span class="reading-card-korean">${escapeHtml(word.korean)}</span>
         <div class="reading-card-body">
-          <span class="reading-card-meaning">${escapeHtml(optionLabel(word))}</span>
-          <span class="reading-card-tag">${escapeHtml(wordDetailTag(word))}</span>
+          <span class="reading-card-meaning">${escapeHtml(word.bangla || '')}</span>
+          ${word.english ? `<span class="reading-card-english">${escapeHtml(word.english)}</span>` : ''}
         </div>
         <span class="reading-card-play" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" width="100%" height="100%"><path d="M6 9v6h3.5l4.5 4V5l-4.5 4H6Z" fill="currentColor" /><path d="M17 9a4 4 0 0 1 0 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
@@ -1255,6 +1329,11 @@
 
       el.readingCards.appendChild(card);
     });
+
+    // Lesson / book / page / category of this page's words, listed below "Back to home".
+    el.readingDetails.innerHTML = pageWords.map((word) =>
+      `<li><span class="reading-details-korean">${escapeHtml(word.korean)}</span> ${escapeHtml(wordDetailTag(word))}</li>`
+    ).join('');
 
     el.readingPrevBtn.disabled = state.readingIndex === 0;
     el.readingNextBtn.textContent = state.readingIndex >= total - 1 ? 'Finish' : 'Next page';
@@ -1323,7 +1402,9 @@
     el.listenProgressFill.parentElement.setAttribute('aria-valuemax', String(state.listenWords.length));
     setListenPlayPauseUI(true);
 
-    // Buffer the first few clips up front so the very first hand-off is instant.
+    // Browsers only allow audio after a tap/click, so unlock it here, then buffer the
+    // first few words up front so the very first hand-off is instant.
+    unlockAudio();
     primeListenAudio(0);
 
     showScreen('listen');
@@ -1366,28 +1447,190 @@
     el.listenPlayIcon.style.display = playing ? 'none' : '';
   }
 
-  /* Preloaded <audio> elements keyed by src. Reusing already-buffered elements is
-   * what makes the 한국어 → বাংলা/English hand-off instant: nothing has to be fetched
-   * or decoded at the moment the first clip ends. */
-  const audioCache = new Map();
-  const AUDIO_CACHE_LIMIT = 150;
 
-  /** Returns a buffered Audio element for `src`, creating and warming it if needed. */
-  function preloadedAudio(src) {
-    if (!src) return null;
-    let audio = audioCache.get(src);
-    if (!audio) {
-      audio = new Audio();
-      audio.preload = 'auto';
-      audio.src = src;
-      audio.load();
-      audioCache.set(src, audio);
-      if (audioCache.size > AUDIO_CACHE_LIMIT) {
-        const oldest = audioCache.keys().next().value;
-        if (oldest !== src) audioCache.delete(oldest);
-      }
+  /* ------------------------------------------------------------------ *
+   * Listen mode audio engine (Web Audio API)
+   *
+   * Goal: the Bangla/English clip starts within 10 ms of the Korean word ending.
+   * Timers and `ended` events can't promise that (they jitter by tens of ms), so:
+   *   1. both clips are fetched + decoded BEFORE the word starts ("called ahead"),
+   *   2. the audible end of the Korean clip is measured (trailing silence ignored),
+   *   3. both clips are scheduled on the audio clock at once:
+   *        Korean  -> start(t0)
+   *        meaning -> start(t0 + koreanAudibleEnd + 5 ms)
+   *      which is sample-accurate and independent of JS timing.
+   * ------------------------------------------------------------------ */
+  const KO_TO_MEANING_GAP = 0.005;  // seconds between the end of the Korean sound and the meaning clip
+  const SILENCE_THRESHOLD = 0.01;   // amplitude below this counts as silence
+  const CLIP_CACHE_LIMIT = 160;
+
+  let audioCtx = null;
+  function getAudioCtx() {
+    if (!audioCtx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      audioCtx = new Ctx({ latencyHint: 'interactive' });
     }
-    return audio;
+    return audioCtx;
+  }
+  function unlockAudio() {
+    const ctx = getAudioCtx();
+    if (ctx && ctx.state !== 'running') ctx.resume().catch(() => {});
+  }
+
+  /* ---- playback speed ---- */
+  function loadListenSpeed() {
+    try {
+      const v = parseFloat(localStorage.getItem(LISTEN_SPEED_KEY));
+      if (LISTEN_SPEEDS.includes(v)) return v;
+    } catch (e) { /* storage unavailable */ }
+    return 1;
+  }
+
+  function setListenSpeed(rate) {
+    if (rate === state.listenSpeed) return;
+    state.listenSpeed = rate;
+    try { localStorage.setItem(LISTEN_SPEED_KEY, String(rate)); } catch (e) { /* ignore */ }
+    renderListenSpeedChips();
+    if (state.listenWords.length) primeListenAudio(state.listenIndex);
+    // Apply right away: restart the current word at the new speed.
+    if (state.listenPlaying && screens.listen && !screens.listen.hidden) {
+      haltListenAudio();
+      state.listenStage = 'ko';
+      advanceListenPlayback();
+    }
+  }
+
+  function renderListenSpeedChips() {
+    if (!el.listenSpeedChips) return;
+    el.listenSpeedChips.innerHTML = '';
+    LISTEN_SPEEDS.forEach((rate) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chip chip--sm' + (rate === state.listenSpeed ? ' is-active' : '');
+      btn.textContent = `${rate}×`;
+      btn.setAttribute('aria-pressed', String(rate === state.listenSpeed));
+      btn.addEventListener('click', () => setListenSpeed(rate));
+      el.listenSpeedChips.appendChild(btn);
+    });
+  }
+
+  /* ---- pitch-preserving time stretch (WSOLA) so 0.5x-2x still sounds natural ---- */
+  function wsolaStretch(channels, sampleRate, rate) {
+    const ref = channels[0];
+    const n = ref.length;
+    const frame = Math.max(512, Math.round(sampleRate * 0.04) & ~1); // ~40 ms
+    const hopOut = frame >> 1;
+    const hopIn = hopOut * rate;
+    const tol = Math.round(sampleRate * 0.012);                       // search +/- 12 ms
+    const outLen = Math.ceil(n / rate);
+    const bufLen = outLen + frame * 2;
+    const outs = channels.map(() => new Float32Array(bufLen));
+    const norm = new Float32Array(bufLen);
+    const win = new Float32Array(frame);
+    for (let i = 0; i < frame; i += 1) win[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / frame);
+
+    let prevPos = 0;
+    for (let k = 0; ; k += 1) {
+      const outPos = k * hopOut;
+      const target = Math.round(k * hopIn);
+      if (outPos >= outLen || target >= n) break;
+
+      let pos = target;
+      const natural = prevPos + hopOut; // where the previous frame would have continued
+      if (k > 0 && natural + hopOut < n) {
+        const lo = Math.max(0, target - tol);
+        const hi = Math.min(n - hopOut - 1, target + tol);
+        let best = -Infinity;
+        for (let p = lo; p <= hi; p += 2) {
+          let dot = 0;
+          let energy = 1e-9;
+          for (let i = 0; i < hopOut; i += 2) {
+            const a = ref[p + i];
+            dot += a * ref[natural + i];
+            energy += a * a;
+          }
+          const score = dot / Math.sqrt(energy);
+          if (score > best) { best = score; pos = p; }
+        }
+      }
+
+      for (let c = 0; c < channels.length; c += 1) {
+        const src = channels[c];
+        const out = outs[c];
+        for (let i = 0; i < frame; i += 1) {
+          const v = pos + i < n ? src[pos + i] : 0;
+          out[outPos + i] += v * win[i];
+        }
+      }
+      for (let i = 0; i < frame; i += 1) norm[outPos + i] += win[i];
+      prevPos = pos;
+    }
+
+    return outs.map((out) => {
+      const res = new Float32Array(outLen);
+      for (let i = 0; i < outLen; i += 1) res[i] = norm[i] > 1e-3 ? out[i] / norm[i] : 0;
+      return res;
+    });
+  }
+
+  /** Seconds at which the last audible sample of the buffer sits (trailing silence ignored). */
+  function audibleEnd(buffer) {
+    let last = 0;
+    for (let c = 0; c < buffer.numberOfChannels; c += 1) {
+      const data = buffer.getChannelData(c);
+      let i = data.length - 1;
+      while (i > 0 && Math.abs(data[i]) < SILENCE_THRESHOLD) i -= 1;
+      if (i > last) last = i;
+    }
+    return Math.min(buffer.duration, (last + 1) / buffer.sampleRate);
+  }
+
+  /* ---- clip cache: src -> decoded buffer, src|rate -> stretched buffer ---- */
+  const rawClips = new Map();
+  const speedClips = new Map();
+
+  function remember(map, key, value) {
+    map.set(key, value);
+    if (map.size > CLIP_CACHE_LIMIT) {
+      const oldest = map.keys().next().value;
+      if (oldest !== key) map.delete(oldest);
+    }
+    return value;
+  }
+
+  function loadRawBuffer(src) {
+    if (!src) return Promise.resolve(null);
+    const cached = rawClips.get(src);
+    if (cached) return cached;
+    const ctx = getAudioCtx();
+    if (!ctx || !window.fetch) return Promise.resolve(null);
+    const job = fetch(src)
+      .then((r) => { if (!r.ok) throw new Error(`http ${r.status}`); return r.arrayBuffer(); })
+      .then((data) => new Promise((resolve, reject) => ctx.decodeAudioData(data, resolve, reject)))
+      .catch(() => { rawClips.delete(src); return null; }); // missing file: let a later call retry
+    return remember(rawClips, src, job);
+  }
+
+  /** Resolves { buffer, end } for `src` at playback `rate`, or null if the clip can't be loaded. */
+  function getClip(src, rate) {
+    if (!src) return Promise.resolve(null);
+    const key = `${src}|${rate}`;
+    const cached = speedClips.get(key);
+    if (cached) return cached;
+    const job = loadRawBuffer(src).then((raw) => {
+      if (!raw) { speedClips.delete(key); return null; }
+      if (rate === 1) return { buffer: raw, end: audibleEnd(raw) };
+      const ctx = getAudioCtx();
+      const channels = [];
+      for (let c = 0; c < raw.numberOfChannels; c += 1) channels.push(raw.getChannelData(c));
+      const stretched = wsolaStretch(channels, raw.sampleRate, rate);
+      const buffer = ctx.createBuffer(stretched.length, stretched[0].length, raw.sampleRate);
+      stretched.forEach((data, c) => buffer.copyToChannel(data, c));
+      // map the measured end of the ORIGINAL clip onto the stretched timeline (exact, no fade-tail error)
+      return { buffer, end: Math.min(buffer.duration, audibleEnd(raw) / rate) };
+    });
+    return remember(speedClips, key, job);
   }
 
   /** The meaning clip that follows the Korean one: Bangla when বাংলা is picked, else English. */
@@ -1395,145 +1638,133 @@
     return meaningAudioPath(word, state.language) || enAudioPath(word);
   }
 
-  /**
-   * Pre-buffers the opening clips of the batch that's currently selected on the
-   * start screen, so even the session's *first* Korean → meaning hand-off is instant
-   * rather than waiting on a first download.
-   */
+  /** Loads (and stretches) both clips of a word ahead of time. */
+  function warmWord(word) {
+    if (!word) return;
+    const rate = state.listenSpeed;
+    getClip(korAudioPath(word), rate);
+    getClip(listenMeaningSrc(word), rate);
+  }
+
+  /** Pre-loads the opening words of the selected batch while still on the start screen. */
   function warmListenRange() {
     if (state.mode !== 'listen' || !state.pool.length) return;
     const batch = sliceByRanges(state.pool, selectedListenRanges());
-    batch.slice(0, 3).forEach((word) => {
-      preloadedAudio(korAudioPath(word));
-      preloadedAudio(listenMeaningSrc(word));
-    });
+    batch.slice(0, 3).forEach(warmWord);
   }
 
-  /** Warms up the next few clips the Listen chain will need, so playback never waits. */
+  /** Warms up the next few words the Listen chain will need, so playback never waits. */
   function primeListenAudio(startIndex) {
     const words = state.listenWords;
     if (!words.length) return;
-    for (let i = 0; i < 3; i += 1) {
-      const word = words[(startIndex + i) % words.length];
-      if (!word) continue;
-      preloadedAudio(korAudioPath(word));
-      preloadedAudio(listenMeaningSrc(word));
-    }
+    for (let i = 0; i < 3; i += 1) warmWord(words[(startIndex + i) % words.length]);
   }
 
-  /** Stops any in-flight audio and invalidates its callbacks, without changing position. */
+  /** Cuts any scheduled/playing audio and invalidates its callbacks, without changing position. */
   function haltListenAudio() {
     state.listenToken += 1;
-    if (state.listenAudioCleanup) {
-      state.listenAudioCleanup();
-      state.listenAudioCleanup = null;
-    }
-    if (state.listenAudio) {
-      state.listenAudio.pause();
-      state.listenAudio = null;
+    if (state.listenUiTimer) { clearTimeout(state.listenUiTimer); state.listenUiTimer = null; }
+    state.listenSources.forEach((src) => {
+      src.onended = null;
+      try { src.stop(); } catch (e) { /* not started yet / already stopped */ }
+      try { src.disconnect(); } catch (e) { /* ignore */ }
+    });
+    state.listenSources = [];
+  }
+
+  /** Moves to the next repeat / word / loop after a word's Korean + meaning pair has finished. */
+  function stepListenPosition() {
+    state.listenStage = 'ko';
+    state.listenRepeatIndex += 1;
+    if (state.listenRepeatIndex >= state.repeatCount) {
+      state.listenRepeatIndex = 0;
+      state.listenIndex += 1;
+      if (state.listenIndex >= state.listenWords.length) {
+        state.listenIndex = 0; // loop back to the start — keeps playing until stopped
+        // In random order, reshuffle each time the batch loops so it doesn't
+        // just replay the same random order over and over.
+        if (state.order === 'random') state.listenWords = shuffle(state.listenWords);
+      }
     }
   }
 
   /**
-   * Plays the current stage's audio for the current word, then — if still
-   * playing — moves to the next stage/word/loop and calls itself again.
-   * This single chain is what makes playback continue unattended.
+   * Plays the current word's Korean clip and its Bangla/English clip back-to-back,
+   * then — if still playing — moves on and calls itself again. This single chain is
+   * what makes playback continue unattended.
    */
   function advanceListenPlayback() {
     if (!state.listenPlaying) return;
     const word = state.listenWords[state.listenIndex];
     if (!word) return;
 
+    state.listenStage = 'ko';
     renderListenWord();
+    el.listenHint.textContent = '';
 
-    const isKo = state.listenStage === 'ko';
     const token = state.listenToken;
+    const rate = state.listenSpeed;
+    const ctx = getAudioCtx();
+    if (!ctx) {
+      el.listenHint.textContent = 'This browser does not support Web Audio — Listen mode needs a modern browser.';
+      return;
+    }
 
-    // Buffer what plays next *while* this clip is playing, so the next one can
-    // start the instant this one ends.
-    if (isKo) preloadedAudio(listenMeaningSrc(word));
-    else primeListenAudio(state.listenIndex + 1);
+    const koSrc = korAudioPath(word);
+    const mnSrc = listenMeaningSrc(word);
+    const fbSrc = !meaningAudioPath(word, state.language) || state.language !== 'bangla' ? null : enAudioPath(word);
 
-    const step = () => {
-      if (token !== state.listenToken) return; // superseded by pause/skip/stop
-      state.listenAudio = null;
-      state.listenAudioCleanup = null;
+    // Everything the word needs is loaded BEFORE anything plays, and the words after it
+    // are loaded while it plays — that is what lets the meaning clip fire instantly.
+    primeListenAudio(state.listenIndex + 1);
+    const meaningClip = getClip(mnSrc, rate).then((c) => c || (fbSrc ? getClip(fbSrc, rate) : null));
 
-      if (state.listenStage === 'ko') {
-        state.listenStage = 'meaning';
-      } else {
-        state.listenStage = 'ko';
-        state.listenRepeatIndex += 1;
-        if (state.listenRepeatIndex >= state.repeatCount) {
-          state.listenRepeatIndex = 0;
-          state.listenIndex += 1;
-          if (state.listenIndex >= state.listenWords.length) {
-            state.listenIndex = 0; // loop back to the start — keeps playing until stopped
-            // In random order, reshuffle each time the batch loops so it doesn't
-            // just replay the same random order over and over.
-            if (state.order === 'random') {
-              state.listenWords = shuffle(state.listenWords);
-            }
-          }
-        }
-      }
+    Promise.all([ctx.resume().catch(() => {}), getClip(koSrc, rate), meaningClip]).then(([, ko, mn]) => {
+      if (token !== state.listenToken || !state.listenPlaying) return; // superseded by pause/skip/stop
 
-      if (state.listenPlaying) advanceListenPlayback();
-    };
-
-    /**
-     * Plays `src` and chains on. If a Bangla clip is missing from audio/bng/, it
-     * falls back to the English one so a gap in the folder never stalls playback.
-     */
-    const playSrc = (src, fallbackSrc) => {
-      const giveUp = () => {
-        if (fallbackSrc) {
-          playSrc(fallbackSrc, null);
-          return;
-        }
-        el.listenHint.textContent = `Audio unavailable for ${word.korean} (${src || 'no file'}) — continuing.`;
-        step();
+      const finish = () => {
+        if (token !== state.listenToken) return;
+        state.listenSources = [];
+        stepListenPosition();
+        if (state.listenPlaying) advanceListenPlayback();
       };
 
-      const audio = preloadedAudio(src);
-      if (!audio || audio.error) {
-        if (src) audioCache.delete(src);
-        giveUp();
+      if (!ko && !mn) {
+        el.listenHint.textContent = `Audio unavailable for ${word.korean} (${koSrc || 'no file'}) — continuing.`;
+        state.listenUiTimer = setTimeout(finish, 600);
         return;
       }
+      if (!ko || !mn) {
+        el.listenHint.textContent = !ko
+          ? `Korean audio missing for ${word.korean} (${koSrc || 'no file'}).`
+          : `Meaning audio missing for ${word.korean} (${mnSrc || 'no file'}).`;
+      }
 
-      let settled = false;
-      const cleanup = () => {
-        audio.removeEventListener('ended', onEnded);
-        audio.removeEventListener('error', onError);
+      const schedule = (clip, when) => {
+        const node = ctx.createBufferSource();
+        node.buffer = clip.buffer;
+        node.connect(ctx.destination);
+        node.start(when);
+        state.listenSources.push(node);
+        return node;
       };
-      function onEnded() {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        step();
-      }
-      function onError() {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        audioCache.delete(src);
-        giveUp();
-      }
 
-      audio.addEventListener('ended', onEnded);
-      audio.addEventListener('error', onError);
-      state.listenAudio = audio;
-      state.listenAudioCleanup = cleanup;
+      // Both clips go onto the audio clock now; the meaning clip is timed against the
+      // *audible* end of the Korean clip, so it follows within KO_TO_MEANING_GAP.
+      const t0 = ctx.currentTime + 0.03;
+      const koNode = ko ? schedule(ko, t0) : null;
+      const meaningAt = ko ? t0 + ko.end + KO_TO_MEANING_GAP : t0;
+      const mnNode = mn ? schedule(mn, meaningAt) : null;
+      (mnNode || koNode).onended = finish;
 
-      try { audio.currentTime = 0; } catch (e) { /* not seekable yet — it starts at 0 anyway */ }
-      const started = audio.play();
-      if (started && typeof started.catch === 'function') started.catch(onError);
-    };
-
-    // Bangla learners fall back to the English clip if the Bangla file is missing.
-    const fallback = !isKo && state.language === 'bangla' ? enAudioPath(word) : null;
-    playSrc(isKo ? korAudioPath(word) : listenMeaningSrc(word), fallback);
+      // Flip the 한국어 → meaning pill when the meaning clip actually begins.
+      state.listenUiTimer = setTimeout(() => {
+        state.listenUiTimer = null;
+        if (token !== state.listenToken) return;
+        state.listenStage = 'meaning';
+        updateListenStagePills();
+      }, Math.max(0, (meaningAt - ctx.currentTime) * 1000));
+    });
   }
 
   function toggleListenPlayPause() {
@@ -1543,6 +1774,7 @@
       setListenPlayPauseUI(false);
     } else {
       state.listenPlaying = true;
+      unlockAudio();
       setListenPlayPauseUI(true);
       advanceListenPlayback();
     }
@@ -1604,6 +1836,10 @@
       btn.addEventListener('click', () => setExamAudio(btn.dataset.audio === 'on'));
     });
 
+    Array.from(el.readingImageToggle.children).forEach((btn) => {
+      btn.addEventListener('click', () => setReadingImage(btn.dataset.image === 'on'));
+    });
+
     Array.from(el.languageToggle.children).forEach((btn) => {
       btn.addEventListener('click', () => setLanguage(btn.dataset.language));
     });
@@ -1646,6 +1882,7 @@
     el.listenPlayPauseBtn.addEventListener('click', toggleListenPlayPause);
     el.listenPrevBtn.addEventListener('click', () => skipListenWord(-1));
     el.listenNextBtn.addEventListener('click', () => skipListenWord(1));
+    renderListenSpeedChips();
     el.listenQuitBtn.addEventListener('click', stopListenSession);
     el.listenHomeBtn.addEventListener('click', stopListenSession);
   }
